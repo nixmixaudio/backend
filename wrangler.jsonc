@@ -18,6 +18,10 @@
     {
       "binding": "ASSETS",
       "bucket_name": "nixmix-assets"
+    },
+    {
+      "binding": "DOWNLOADS",
+      "bucket_name": "nixmix-audio-downloads"
     }
   ],
   "vars": {
