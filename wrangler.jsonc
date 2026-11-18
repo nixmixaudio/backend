@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nixmixaudio-backend",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nixmix-audio-db",
+      "database_id": "e7b04b01-9316-4d72-ada0-b6b79cb4ace2"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "nixmix-assets"
+    }
+  ],
+  "vars": {
+    "FRONTEND_URL": "https://nixmixaudio.com,https://www.nixmixaudio.com"
+  }
+}
