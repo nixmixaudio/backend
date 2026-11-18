@@ -1,14 +1,22 @@
 # NixMix Audio backend
 
-This directory is the standalone Express backend for the NixMix Audio frontend.
+This directory is the standalone backend for the NixMix Audio frontend. It can
+run locally as Node/Express and in Cloudflare Workers through `worker.js` and
+Cloudflare's `httpServerHandler`.
 
 ## Deploy
 
-Run from this directory:
+Run locally from this directory:
 
 ```bash
 npm install
 npm start
+```
+
+Deploy the Worker with:
+
+```bash
+npm run deploy
 ```
 
 Set the variables in `.env.example` in the hosting provider. In particular,
@@ -19,8 +27,6 @@ The frontend must be built with `VITE_API_URL` set to `API_PUBLIC_URL`.
 
 ## Cloudflare Worker migration
 
-`wrangler.jsonc` contains the planned D1 and R2 bindings for the Cloudflare
-version. The current `index.js` is still the Express server and must be
-replaced by a Worker `fetch(request, env)` entrypoint before running
-`npm run deploy`. The Worker version must use D1 for records and R2 for
-installer/image objects; it cannot use the local JSON files or filesystem.
+`wrangler.jsonc` contains the D1 and R2 bindings. The Worker adapter is now in
+`worker.js`. The data layer still needs to be migrated from local JSON/filesystem
+storage to D1/R2 before production data is persistent on Workers.

@@ -1,4 +1,3 @@
-import 'dotenv/config'
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -1063,4 +1062,4 @@ app.get('*', (req, res, next) => {
   return res.sendFile(path.resolve(here, '../dist/index.html'), error => { if (error) next() })
 })
 
-app.listen(port, () => console.log(`NixMix Audio is listening on port ${port}`))
+export { app }
