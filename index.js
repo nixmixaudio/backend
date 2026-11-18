@@ -4,7 +4,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
-import nodemailer from 'nodemailer'
 import Razorpay from 'razorpay'
 import {
   clearSessionCookie,
@@ -66,19 +65,25 @@ app.use((req, res, next) => {
 app.use('/uploads', express.static(uploadsDir, { fallthrough: true }))
 
 function isMailerConfigured() {
-  const { SMTP_HOST, SMTP_USER, SMTP_PASSWORD } = process.env
-  return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASSWORD)
+  return Boolean(process.env.RESEND_API_KEY && (process.env.RESEND_FROM || process.env.MAIL_FROM))
 }
 
-function getMailer() {
-  const { SMTP_HOST, SMTP_USER, SMTP_PASSWORD } = process.env
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD) throw new Error('Email delivery is not configured.')
-  return nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_SECURE || 'false') === 'true',
-    auth: { user: SMTP_USER, pass: SMTP_PASSWORD },
+async function sendResendEmail({ from, to, replyTo, subject, text, html }) {
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ from, to, ...(replyTo ? { reply_to: replyTo } : {}), subject, text, html }),
   })
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    const error = new Error(data?.message || `Resend email failed (${response.status}).`)
+    error.code = 'RESEND_ERROR'
+    throw error
+  }
+  return response.json()
 }
 
 async function getAssetForProduct(product, platform, expectedFile = '') {
@@ -127,21 +132,12 @@ function slugify(value) {
 
 async function sendOrderEmail({ email, name, productName, orderId, invoiceNo, amount, downloads, hasPreOrder }) {
   if (!isMailerConfigured()) return false
-  const transporter = getMailer()
   const entries = (downloads || []).filter(item => item.token)
   const subject = `Your NixMix Audio order (${orderId}) — ${productName}`
   const amountLine = !amount ? 'Total: Free' : `Total paid: ₹${(amount / 100).toFixed(2)}`
   const invoiceLine = invoiceNo ? `Invoice No: ${invoiceNo}` : ''
   const greetingName = escapeHtml(name || 'there')
   const safeProductName = escapeHtml(productName)
-  let logoAttachment = null
-  try {
-    const logoPath = path.resolve(here, '../dist/nixmix-logo-inverted.png')
-    await fs.access(logoPath)
-    logoAttachment = { filename: 'nixmix-logo-inverted.png', path: logoPath, cid: 'nixmix-logo' }
-  } catch {
-    // The text wordmark below remains as a fallback if the built logo is unavailable.
-  }
   const linksText = entries.length
     ? entries.map(item => `Download ${item.productName}${item.platformLabel ? ` (${item.platformLabel})` : ''}: ${apiPublicUrl}/api/download/${item.token}`).join('\n')
     : hasPreOrder
@@ -151,9 +147,7 @@ async function sendOrderEmail({ email, name, productName, orderId, invoiceNo, am
     ? entries.map(item => `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px"><tr><td><a href="${apiPublicUrl}/api/download/${item.token}" style="display:block;padding:15px 18px;background:#bfff68;color:#101827;text-decoration:none;border-radius:10px;font-size:14px;font-weight:700;text-align:center">Download ${escapeHtml(item.productName)}${item.platformLabel ? ` · ${escapeHtml(item.platformLabel)}` : ''} &nbsp;↗</a></td></tr></table>`).join('')
     : `<div style="padding:16px;border:1px solid #dce3eb;border-radius:10px;background:#f6f8fb;color:#526176;font-size:13px;line-height:1.6">${escapeHtml(hasPreOrder ? 'Your pre-order is confirmed. We will email your private installer link as soon as the release bundle is published.' : 'Your order is confirmed. Your installer link will appear in your NixMix Audio dashboard when it is ready.')}</div>`
 
-  const logoHtml = logoAttachment
-    ? '<img src="cid:nixmix-logo" width="190" alt="NixMix Audio" style="display:block;width:190px;max-width:75%;height:auto;border:0">'
-    : '<div style="font-size:22px;font-weight:800;letter-spacing:-.05em;color:#ffffff">NIXMIX <span style="color:#bfff68">AUDIO</span></div>'
+  const logoHtml = '<div style="font-size:22px;font-weight:800;letter-spacing:-.05em;color:#ffffff">NIXMIX <span style="color:#bfff68">AUDIO</span></div>'
   const html = `<!doctype html><html><head><meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"></head><body style="margin:0;padding:0;background:#080d18;font-family:Arial,Helvetica,sans-serif;color:#172033"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#080d18;padding:24px 10px"><tr><td align="center"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#f7f8f4;border-radius:22px 8px 22px 8px;overflow:hidden;box-shadow:0 16px 55px rgba(0,0,0,.35)">
     <tr><td style="height:6px;background:#c2ff78;font-size:0;line-height:0">&nbsp;</td></tr>
     <tr><td style="padding:28px 34px 34px;background:radial-gradient(circle at 82% 18%,#34335b 0,#111a2b 42%,#0b1220 100%);color:#ffffff"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td>${logoHtml}</td><td align="right" valign="top" style="font-size:10px;letter-spacing:.16em;color:#9fb1c9;font-weight:700">ORDER<br/>CONFIRMED</td></tr></table><div style="margin-top:34px;font-size:11px;letter-spacing:.18em;color:#bfff68;font-weight:700">YOUR SOUND IS READY ✳</div><h1 style="margin:12px 0 10px;font-size:34px;line-height:1.05;letter-spacing:-.05em;color:#ffffff">Thanks for your order,<br/><span style="color:#c9b7ff">${greetingName}.</span></h1><p style="max-width:470px;margin:0;color:#b7c5d8;font-size:14px;line-height:1.7">Your NixMix Audio order is confirmed. Your private installer access is ready below.</p></td></tr>
@@ -163,23 +157,21 @@ async function sendOrderEmail({ email, name, productName, orderId, invoiceNo, am
     <tr><td style="padding:24px 34px;background:#111a2b;border-top:6px solid #c9b7ff"><p style="margin:0;color:#c2cedd;font-size:12px;line-height:1.7">Need help with installation or your order? Reply to this email or contact <a href="mailto:support@nixmixaudio.com" style="color:#c2ff78;font-weight:700;text-decoration:none">support@nixmixaudio.com</a>.</p><p style="margin:15px 0 0;color:#8495ad;font-size:11px;line-height:1.6">Thoughtful tools for curious ears.<br/>NixMix Audio · India, worldwide in spirit</p></td></tr>
   </table><p style="margin:18px 0 0;color:#78889d;font-size:11px">This is an automated order confirmation from NixMix Audio.</p></td></tr></table></body></html>`
 
-  await transporter.sendMail({
-    from: process.env.MAIL_FROM || process.env.SMTP_USER,
+  await sendResendEmail({
+    from: process.env.RESEND_FROM || process.env.MAIL_FROM,
     to: email,
     subject,
     text: `Hi ${name},\n\nYour NixMix Audio order is confirmed.\n${productName}\n${amountLine}\n${invoiceLine ? `${invoiceLine}\n` : ''}Order reference: ${orderId}\n\n${linksText}\n\n${entries.length ? 'This private link expires in 7 days and allows up to 5 downloads.\n' : ''}Need help? support@nixmixaudio.com\n\nNixMix Audio`,
     html,
-    ...(logoAttachment ? { attachments: [logoAttachment] } : {}),
   })
   return true
 }
 
 async function sendContactEmail({ type, name, email, subject, message, details = '' }) {
   if (!isMailerConfigured()) return false
-  const transporter = getMailer()
   const safeType = type === 'studio' ? 'Studio request' : 'Support request'
-  await transporter.sendMail({
-    from: process.env.MAIL_FROM || 'support@nixmixaudio.com',
+  await sendResendEmail({
+    from: process.env.RESEND_FROM || process.env.MAIL_FROM || 'support@nixmixaudio.com',
     to: process.env.SUPPORT_EMAIL || 'support@nixmixaudio.com',
     replyTo: email,
     subject: `[NixMix ${safeType}] ${subject}`,
