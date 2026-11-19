@@ -103,6 +103,13 @@ async function sendResendEmail({ from, to, replyTo, subject, text, html }) {
 
 async function getAssetForProduct(product, platform, expectedFile = '') {
   const fileName = expectedFile || product?.files?.bundle || product?.files?.[platform] || product?.files?.windows || product?.files?.mac
+  const objectKey = product?.files?.bundleKey || product?.files?.[`${platform}Key`]
+  const r2 = globalThis.__NIXMIX_DOWNLOADS
+  if (r2 && objectKey) {
+    if (expectedFile && product?.files?.bundle && expectedFile !== product.files.bundle) return null
+    const object = await r2.get(objectKey)
+    return object ? { fileName: product.files.bundle || fileName || 'installer.zip', objectKey, object } : null
+  }
   if (!fileName || path.basename(fileName) !== fileName) return null
   const filePath = path.join(downloadsDir, fileName)
   try {
@@ -111,6 +118,16 @@ async function getAssetForProduct(product, platform, expectedFile = '') {
   } catch {
     return null
   }
+}
+
+async function sendAsset(res, asset) {
+  if (asset.object) {
+    res.setHeader('Content-Type', asset.object.httpMetadata?.contentType || 'application/zip')
+    res.setHeader('Content-Length', String(asset.object.size || 0))
+    res.setHeader('Content-Disposition', `attachment; filename="${String(asset.fileName).replace(/["\\\r\n]/g, '_')}"`)
+    return res.end(Buffer.from(await asset.object.arrayBuffer()))
+  }
+  return res.download(asset.filePath, asset.fileName)
 }
 
 function createToken() {
@@ -462,7 +479,7 @@ app.get('/api/orders/:orderId/download/:productId/:platform?', requireUser, asyn
       order.downloads = (order.downloads || 0) + 1
     }
     await saveOrder(order)
-    return res.download(asset.filePath, asset.fileName)
+    return sendAsset(res, asset)
   } catch (error) {
     console.error('Dashboard download failed:', error.message)
     return res.status(500).send('Could not start download.')
@@ -807,7 +824,7 @@ app.get('/api/download/:token', async (req, res) => {
       matchedOrder.downloads = (matchedOrder.downloads || 0) + 1
     }
     await saveOrder(matchedOrder)
-    return res.download(asset.filePath, asset.fileName)
+    return sendAsset(res, asset)
   } catch (error) {
     console.error('Download link could not be processed:', error.message)
     return res.status(500).send('The download could not be started. Please contact NixMix Audio support.')
@@ -956,6 +973,8 @@ function buildProductPayload(body, existing = null) {
 
   const now = new Date().toISOString()
   const bundleFile = String(body?.files?.bundle ?? existing?.files?.bundle ?? existing?.files?.mac ?? existing?.files?.windows ?? '').trim() || `${id}-windows-mac.zip`
+  const requestedBundleKey = String(body?.files?.bundleKey ?? existing?.files?.bundleKey ?? '').trim()
+  const bundleKey = requestedBundleKey && requestedBundleKey.startsWith(`installers/${id}/`) ? requestedBundleKey : ''
   return {
     id,
     name,
@@ -973,6 +992,7 @@ function buildProductPayload(body, existing = null) {
     accent: ['lime', 'mint', 'copper', 'cyan', 'violet'].includes(body?.accent) ? body.accent : (existing?.accent || 'cyan'),
     files: {
       bundle: bundleFile,
+      ...(bundleKey ? { bundleKey } : {}),
     },
     createdAt: existing?.createdAt || now,
     updatedAt: now,
@@ -1037,9 +1057,37 @@ app.delete('/api/admin/products/:id', requireAdmin, async (req, res) => {
 })
 
 app.post('/api/admin/upload', requireAdmin, async (req, res) => {
-  const { filename, dataUrl } = req.body || {}
+  const { filename, dataUrl, kind = 'image', productId = '' } = req.body || {}
   if (typeof dataUrl !== 'string') {
-    return res.status(400).json({ message: 'Missing image data.' })
+    return res.status(400).json({ message: 'Missing upload data.' })
+  }
+  if (kind === 'installer') {
+    const originalName = path.basename(String(filename || 'installer.zip'))
+    if (!/\.zip$/i.test(originalName)) {
+      return res.status(400).json({ message: 'Please upload a ZIP installer file.' })
+    }
+    const match = dataUrl.match(/^data:(?:application\/zip|application\/x-zip-compressed|application\/octet-stream);base64,([A-Za-z0-9+/=]+)$/)
+    if (!match) return res.status(400).json({ message: 'Please upload a valid ZIP installer file.' })
+    const buffer = Buffer.from(match[1], 'base64')
+    if (buffer.length > 250 * 1024 * 1024) return res.status(400).json({ message: 'Installer ZIP must be 250 MB or smaller.' })
+    const r2 = globalThis.__NIXMIX_DOWNLOADS
+    const safeProductId = slugify(productId)
+    if (!r2 || !safeProductId) return res.status(503).json({ message: 'Cloudflare R2 installer storage is not available.' })
+    const base = slugify(path.basename(originalName, path.extname(originalName))) || 'installer'
+    const objectKey = `installers/${safeProductId}/${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${base}.zip`
+    try {
+      await r2.put(objectKey, buffer, {
+        httpMetadata: {
+          contentType: 'application/zip',
+          contentDisposition: `attachment; filename="${originalName.replace(/["\\\r\n]/g, '_')}"`,
+        },
+        customMetadata: { productId: safeProductId, originalName },
+      })
+      return res.status(201).json({ ok: true, storage: 'r2', key: objectKey, fileName: originalName })
+    } catch (error) {
+      console.error('Installer upload error:', error.message)
+      return res.status(500).json({ message: 'Failed to save installer to Cloudflare R2.' })
+    }
   }
   const match = dataUrl.match(/^data:(image\/(?:png|jpeg|jpg|webp|gif|svg\+xml));base64,([A-Za-z0-9+/=]+)$/)
   if (!match) {

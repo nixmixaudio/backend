@@ -8,6 +8,7 @@ for (const [key, value] of Object.entries(env)) {
   if (typeof value === 'string') process.env[key] = value
 }
 globalThis.__NIXMIX_DB = env.DB
+globalThis.__NIXMIX_DOWNLOADS = env.DOWNLOADS
 
 const { app } = await import('./index.js')
 app.listen(3000)
