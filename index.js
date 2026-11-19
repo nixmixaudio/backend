@@ -245,6 +245,7 @@ async function addDownloadTokens(products, itemTokens, emailDownloads) {
 
 function sanitizeOrderForClient(order) {
   const { tokenHash: _th, itemTokens, ...rest } = order
+  const dashboardApiUrl = allowedOrigins[0] || publicSiteUrl || apiPublicUrl
   return {
     ...rest,
     items: (order.items || [{ productId: order.productId, productName: order.productName, pricePaise: order.amount || 0 }]).map((item, index) => {
@@ -260,7 +261,7 @@ function sanitizeOrderForClient(order) {
           platformLabel: token.platformLabel || 'Windows + macOS bundle',
           downloads: token.downloads || 0,
           maxDownloads: token.maxDownloads || 5,
-          href: `${apiPublicUrl}/api/orders/${encodeURIComponent(order.id)}/download/${encodeURIComponent(item.productId)}/${encodeURIComponent(token.platform || 'bundle')}`,
+          href: `${dashboardApiUrl}/api/orders/${encodeURIComponent(order.id)}/download/${encodeURIComponent(item.productId)}/${encodeURIComponent(token.platform || 'bundle')}`,
         })),
       }
     }),
