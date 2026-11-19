@@ -245,7 +245,7 @@ async function addDownloadTokens(products, itemTokens, emailDownloads) {
 
 function sanitizeOrderForClient(order) {
   const { tokenHash: _th, itemTokens, ...rest } = order
-  const dashboardApiUrl = allowedOrigins[0] || publicSiteUrl || apiPublicUrl
+  const dashboardApiUrl = apiPublicUrl || allowedOrigins[0] || publicSiteUrl
   return {
     ...rest,
     items: (order.items || [{ productId: order.productId, productName: order.productName, pricePaise: order.amount || 0 }]).map((item, index) => {
