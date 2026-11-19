@@ -166,6 +166,57 @@ export const DEFAULT_PRODUCTS = [
 ]
 
 const queues = new Map()
+let d1SchemaPromise = null
+
+function getD1() {
+  return globalThis.__NIXMIX_DB || null
+}
+
+async function ensureD1Schema() {
+  const db = getD1()
+  if (!db) return null
+  if (!d1SchemaPromise) {
+    d1SchemaPromise = db.prepare(`
+      CREATE TABLE IF NOT EXISTS nixmix_records (
+        kind TEXT NOT NULL,
+        id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (kind, id)
+      )
+    `).run()
+  }
+  await d1SchemaPromise
+  return db
+}
+
+async function readD1Records(kind) {
+  const db = await ensureD1Schema()
+  if (!db) return null
+  const result = await db.prepare('SELECT id, data FROM nixmix_records WHERE kind = ? ORDER BY updated_at ASC').bind(kind).all()
+  return (result.results || []).map(row => JSON.parse(row.data))
+}
+
+async function upsertD1Records(kind, records) {
+  const db = await ensureD1Schema()
+  if (!db) return
+  const now = new Date().toISOString()
+  await db.batch(records.map(record => db.prepare(`
+    INSERT INTO nixmix_records (kind, id, data, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(kind, id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+  `).bind(kind, String(record.id), JSON.stringify(record), now)))
+}
+
+async function replaceD1Records(kind, records) {
+  const db = await ensureD1Schema()
+  if (!db) return
+  const now = new Date().toISOString()
+  const statements = [db.prepare('DELETE FROM nixmix_records WHERE kind = ?').bind(kind)]
+  statements.push(...records.map(record => db.prepare(`
+    INSERT INTO nixmix_records (kind, id, data, updated_at) VALUES (?, ?, ?, ?)
+  `).bind(kind, String(record.id), JSON.stringify(record), now)))
+  await db.batch(statements)
+}
 
 async function readJsonFile(filePath, fallback) {
   try {
@@ -196,6 +247,20 @@ export async function getSessionSecret() {
     return process.env.SESSION_SECRET
   }
   if (cachedSessionSecret) return cachedSessionSecret
+  const db = await ensureD1Schema()
+  if (db) {
+    const existing = await db.prepare('SELECT data FROM nixmix_records WHERE kind = ? AND id = ?').bind('meta', 'session-secret').first()
+    if (existing?.data) {
+      cachedSessionSecret = existing.data
+      return cachedSessionSecret
+    }
+    cachedSessionSecret = crypto.randomBytes(32).toString('hex')
+    await db.prepare(`
+      INSERT INTO nixmix_records (kind, id, data, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(kind, id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+    `).bind('meta', 'session-secret', cachedSessionSecret, new Date().toISOString()).run()
+    return cachedSessionSecret
+  }
   try {
     cachedSessionSecret = (await fs.readFile(sessionSecretFile, 'utf8')).trim()
     if (cachedSessionSecret.length >= 32) return cachedSessionSecret
@@ -209,10 +274,19 @@ export async function getSessionSecret() {
 }
 
 export async function readOrders() {
+  const d1 = await readD1Records('order')
+  if (d1) return d1
   return readJsonFile(ordersFile, [])
 }
 
 export function saveOrder(order) {
+  if (getD1()) {
+    return (async () => {
+      const batch = Array.isArray(order) ? order : [order]
+      await upsertD1Records('order', batch)
+      return order
+    })()
+  }
   return enqueue(ordersFile, async () => {
     const orders = await readOrders()
     const batch = Array.isArray(order) ? order : [order]
@@ -227,14 +301,21 @@ export function saveOrder(order) {
 }
 
 export async function readUsers() {
+  const d1 = await readD1Records('user')
+  if (d1) return d1
   return readJsonFile(usersFile, [])
 }
 
 export async function readContactRequests() {
+  const d1 = await readD1Records('request')
+  if (d1) return d1
   return readJsonFile(contactRequestsFile, [])
 }
 
 export function saveContactRequest(request) {
+  if (getD1()) {
+    return upsertD1Records('request', [request]).then(() => request)
+  }
   return enqueue(contactRequestsFile, async () => {
     const requests = await readContactRequests()
     const index = requests.findIndex(item => item.id === request.id)
@@ -246,6 +327,16 @@ export function saveContactRequest(request) {
 }
 
 export function updateContactRequest(id, patch) {
+  if (getD1()) {
+    return (async () => {
+      const requests = await readContactRequests()
+      const existing = requests.find(item => item.id === id)
+      if (!existing) return null
+      const updated = { ...existing, ...patch, updatedAt: new Date().toISOString() }
+      await upsertD1Records('request', [updated])
+      return updated
+    })()
+  }
   return enqueue(contactRequestsFile, async () => {
     const requests = await readContactRequests()
     const index = requests.findIndex(item => item.id === id)
@@ -257,6 +348,42 @@ export function updateContactRequest(id, patch) {
 }
 
 export function upsertUser(profile) {
+  if (getD1()) {
+    return (async () => {
+      const users = await readUsers()
+      const now = new Date().toISOString()
+      const idx = users.findIndex(u => u.id === profile.sub || u.email === profile.email.toLowerCase())
+      if (idx >= 0) {
+        const existing = users[idx]
+        const updated = {
+          ...existing,
+          id: profile.sub || existing.id,
+          sub: profile.sub || existing.sub,
+          email: profile.email.toLowerCase(),
+          name: profile.name || existing.name,
+          picture: profile.picture || existing.picture,
+          lastLoginAt: now,
+        }
+        await upsertD1Records('user', [updated])
+        return updated
+      }
+      const created = {
+        id: profile.sub,
+        sub: profile.sub,
+        email: profile.email.toLowerCase(),
+        name: profile.name || profile.email.split('@')[0],
+        picture: profile.picture || '',
+        phone: '',
+        banned: false,
+        bannedAt: null,
+        bannedReason: '',
+        createdAt: now,
+        lastLoginAt: now,
+      }
+      await upsertD1Records('user', [created])
+      return created
+    })()
+  }
   return enqueue(usersFile, async () => {
     const users = await readUsers()
     const now = new Date().toISOString()
@@ -295,6 +422,16 @@ export function upsertUser(profile) {
 }
 
 export function updateUser(userId, patch) {
+  if (getD1()) {
+    return (async () => {
+      const users = await readUsers()
+      const idx = users.findIndex(u => u.id === userId || u.sub === userId)
+      if (idx < 0) return null
+      const updated = { ...users[idx], ...patch }
+      await upsertD1Records('user', [updated])
+      return updated
+    })()
+  }
   return enqueue(usersFile, async () => {
     const users = await readUsers()
     const idx = users.findIndex(u => u.id === userId || u.sub === userId)
@@ -306,6 +443,12 @@ export function updateUser(userId, patch) {
 }
 
 export async function readProducts() {
+  const d1 = await readD1Records('product')
+  if (d1 && d1.length > 0) return d1
+  if (d1) {
+    await replaceD1Records('product', DEFAULT_PRODUCTS)
+    return DEFAULT_PRODUCTS
+  }
   const existing = await readJsonFile(productsFile, null)
   if (Array.isArray(existing) && existing.length > 0) return existing
   // Seed defaults on first access
@@ -318,6 +461,7 @@ export async function readProducts() {
 }
 
 export function saveProducts(products) {
+  if (getD1()) return replaceD1Records('product', products).then(() => products)
   return enqueue(productsFile, async () => {
     await writeJsonAtomic(productsFile, products)
     return products
@@ -325,6 +469,14 @@ export function saveProducts(products) {
 }
 
 export function mutateProducts(mutator) {
+  if (getD1()) {
+    return (async () => {
+      const current = await readProducts()
+      const updated = await mutator([...current])
+      await replaceD1Records('product', updated)
+      return updated
+    })()
+  }
   return enqueue(productsFile, async () => {
     const current = await readJsonFile(productsFile, null)
     const list = Array.isArray(current) && current.length > 0 ? [...current] : [...DEFAULT_PRODUCTS]
