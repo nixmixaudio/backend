@@ -4,6 +4,9 @@
   "main": "worker.js",
   "compatibility_date": "2026-11-17",
   "compatibility_flags": ["nodejs_compat"],
+  "alias": {
+    "body-parser": "./worker-body-parser-shim.js"
+  },
   "observability": {
     "enabled": true
   },
@@ -25,6 +28,8 @@
     }
   ],
   "vars": {
-    "FRONTEND_URL": "https://nixmixaudio.com,https://www.nixmixaudio.com"
+    "FRONTEND_URL": "https://nixmixaudio.com,https://www.nixmixaudio.com",
+    "PUBLIC_SITE_URL": "https://nixmixaudio.com",
+    "API_PUBLIC_URL": "https://nixmixaudio-backend.nixmixaudio.workers.dev"
   }
 }

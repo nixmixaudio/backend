@@ -48,7 +48,23 @@ const allowedOrigins = String(process.env.FRONTEND_URL || 'http://localhost:5173
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 let exchangeRatesCache = { expiresAt: 0, rates: { INR: 1 } }
 
-app.use(express.json({ limit: '10mb' }))
+// Express's built-in JSON parser pulls in body-parser/iconv-lite, which is not
+// compatible with the Cloudflare Workers runtime. Keep parsing local and
+// lightweight so the same app works in Node and Workers.
+app.use(async (req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next()
+  const contentType = String(req.headers['content-type'] || '').toLowerCase()
+  if (!contentType.includes('application/json')) return next()
+  try {
+    const chunks = []
+    for await (const chunk of req) chunks.push(Buffer.from(chunk))
+    const raw = Buffer.concat(chunks).toString('utf8').trim()
+    req.body = raw ? JSON.parse(raw) : {}
+    return next()
+  } catch {
+    return res.status(400).json({ message: 'Invalid JSON body.' })
+  }
+})
 app.use((req, res, next) => {
   const origin = String(req.headers.origin || '').replace(/\/$/, '')
   if (origin && allowedOrigins.includes(origin)) {
