@@ -261,7 +261,7 @@ function sanitizeOrderForClient(order) {
           platformLabel: token.platformLabel || 'Windows + macOS bundle',
           downloads: token.downloads || 0,
           maxDownloads: token.maxDownloads || 5,
-          href: `${dashboardApiUrl}/api/orders/${encodeURIComponent(order.id)}/download/${encodeURIComponent(item.productId)}/${encodeURIComponent(token.platform || 'bundle')}`,
+          href: `${dashboardApiUrl}/api/orders/${encodeURIComponent(order.id)}/download/${encodeURIComponent(item.productId)}/${encodeURIComponent(token.platform || 'bundle')}?download=1`,
         })),
       }
     }),
