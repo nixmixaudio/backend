@@ -261,7 +261,7 @@ function sanitizeOrderForClient(order) {
           platformLabel: token.platformLabel || 'Windows + macOS bundle',
           downloads: token.downloads || 0,
           maxDownloads: token.maxDownloads || 5,
-          href: `${dashboardApiUrl}/api/orders/${encodeURIComponent(order.id)}/download/${encodeURIComponent(item.productId)}/${encodeURIComponent(token.platform || 'bundle')}?download=1`,
+          href: `${dashboardApiUrl}/api/download-file/${encodeURIComponent(order.id)}/${encodeURIComponent(item.productId)}/${encodeURIComponent(token.platform || 'bundle')}?download=1`,
         })),
       }
     }),
@@ -433,6 +433,12 @@ app.get('/api/orders/mine', requireUser, async (req, res) => {
     console.error('Failed to read user orders:', error.message)
     return res.status(500).json({ message: 'Could not load your orders.' })
   }
+})
+
+app.get('/api/download-file/:orderId/:productId/:platform?', (req, res, next) => {
+  const suffix = req.params.platform ? `/${encodeURIComponent(req.params.platform)}` : ''
+  const query = req.url.includes('?') ? `?${req.url.split('?')[1]}` : ''
+  return res.redirect(307, `/api/orders/${encodeURIComponent(req.params.orderId)}/download/${encodeURIComponent(req.params.productId)}${suffix}${query}`)
 })
 
 app.get('/api/orders/:orderId/download/:productId/:platform?', requireUser, async (req, res) => {
